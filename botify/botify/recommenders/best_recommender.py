@@ -2,6 +2,8 @@ from .toppop import TopPop
 from .recommender import Recommender
 import random
 
+LIKE_THRESHOLD = 0.5
+
 
 class BestRecommender(Recommender):
     """
@@ -18,24 +20,26 @@ class BestRecommender(Recommender):
 
     def recommend_next(self, user: int, prev_track: int, prev_track_time: float) -> int:
         if user not in self.history:
-            self.history[user] = set()
+            self.history[user] = []
 
         previous_track = self.tracks_redis.get(prev_track)
         if previous_track is None:
             return self.fallback.recommend_next(user, prev_track, prev_track_time)
 
-        self.history[user].add(prev_track)
-        previous_track = self.catalog.from_bytes(previous_track)
-        recommendations = previous_track.recommendations
-        if not recommendations:
-            t = self.fallback.recommend_next(user, prev_track, prev_track_time)
-            if t in self.history[user]:
-                t = self.fallback.recommend_next(user, prev_track, prev_track_time)
-            return t
+        self.history[user].append((prev_track, prev_track_time))
+        all_recommendations = []
+        listened_tracks = set()
+        for track, time in self.history[user]:
+            listened_tracks.add(track)
+            if time > LIKE_THRESHOLD:
+                t = self.tracks_redis.get(track)
+                track_data = self.catalog.from_bytes(t)
+                rec = track_data.recommendations
+                if rec:
+                    all_recommendations.extend(list(rec))
 
-        shuffled = list(recommendations)
-        random.shuffle(shuffled)
-        for t in shuffled:
-            if t not in self.history[user]:
+        random.shuffle(all_recommendations)
+        for t in all_recommendations:
+            if t not in listened_tracks:
                 return t
-        return shuffled[0]
+        return self.fallback.recommend_next(user, prev_track, prev_track_time)
